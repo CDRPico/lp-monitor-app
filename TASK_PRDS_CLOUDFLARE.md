@@ -11,6 +11,7 @@
 8. [Alert System](#8-alert-system)
 9. [Worker & Runtime](#9-worker--runtime)
 10. [Documentation](#10-documentation)
+11. [Dynamic Gas Estimation & Network Congestion](#11-dynamic-gas-estimation--network-congestion)
 
 ---
 
@@ -1283,3 +1284,203 @@ wrangler secret put TELEGRAM_BOT_TOKEN
 - [ ] All features documented
 - [ ] Architecture is clear
 - [ ] Common issues covered
+
+---
+
+## 11. Dynamic Gas Estimation & Network Congestion
+
+### Owner: Developer A or B (2.5 hours)
+### Dependencies: Contract Integration, Core Mathematics
+
+### Objectives
+- Implement real-time gas price monitoring for Arbitrum
+- Track network congestion patterns
+- Provide accurate gas cost estimates for rebalancing decisions
+- Cache gas prices to reduce RPC calls
+- Handle EIP-1559 dynamics (base fee + priority fee)
+
+### Deliverables
+
+1. **Gas Price Oracle** (`src/utils/gasPriceOracle.ts`):
+   ```typescript
+   export interface GasMetrics {
+     baseFeePerGas: bigint;
+     priorityFeePerGas: bigint;
+     totalGasPrice: bigint;
+     congestionLevel: 'low' | 'medium' | 'high' | 'extreme';
+     estimatedWaitTime: number; // in seconds
+     confidence: number; // 0-1
+   }
+
+   export class GasPriceOracle {
+     private cache: Map<string, { data: GasMetrics; timestamp: number }> = new Map();
+     private readonly CACHE_TTL = 30000; // 30 seconds
+     
+     constructor(
+       private provider: ethers.JsonRpcProvider,
+       private historicalWindow: number = 20 // blocks to analyze
+     ) {}
+     
+     async getCurrentGasMetrics(): Promise<GasMetrics> {
+       // Check cache first
+       const cached = this.getCached('current');
+       if (cached) return cached;
+       
+       // Get current block and fee history
+       const [block, feeHistory] = await Promise.all([
+         this.provider.getBlock('latest'),
+         this.provider.send('eth_feeHistory', [
+           this.historicalWindow,
+           'latest',
+           [25, 50, 75, 90] // Percentiles for priority fees
+         ])
+       ]);
+       
+       // Calculate metrics
+       const metrics = this.calculateMetrics(block, feeHistory);
+       this.setCache('current', metrics);
+       
+       return metrics;
+     }
+     
+     private calculateCongestionLevel(
+       baseFee: bigint,
+       historicalBaseFees: bigint[]
+     ): 'low' | 'medium' | 'high' | 'extreme' {
+       // Arbitrum-specific thresholds (in gwei)
+       const avgBaseFee = this.calculateAverage(historicalBaseFees);
+       const ratio = Number(baseFee) / Number(avgBaseFee);
+       
+       if (ratio < 0.8) return 'low';
+       if (ratio < 1.2) return 'medium';
+       if (ratio < 2.0) return 'high';
+       return 'extreme';
+     }
+     
+     estimateTransactionCost(
+       gasUnits: bigint,
+       urgency: 'low' | 'medium' | 'high' = 'medium'
+     ): Promise<{ costWei: bigint; costUsd: number }> {
+       // Adjust priority fee based on urgency
+       const priorityMultipliers = {
+         low: 0.8,
+         medium: 1.0,
+         high: 1.5
+       };
+     }
+   }
+   ```
+
+2. **Congestion Tracker** (`src/utils/congestionTracker.ts`):
+   ```typescript
+   export class CongestionTracker {
+     constructor(
+       private kv: KVNamespace,
+       private windowSize: number = 100 // Track last 100 blocks
+     ) {}
+     
+     async recordGasPrice(blockNumber: number, metrics: GasMetrics): Promise<void> {
+       // Store in KV with sliding window
+       const key = `gas:history:${blockNumber}`;
+       await this.kv.put(key, JSON.stringify(metrics), {
+         expirationTtl: 3600 // 1 hour
+       });
+     }
+     
+     async getHistoricalPattern(hours: number = 24): Promise<{
+       avgGasPrice: bigint;
+       peakHours: number[];
+       lowHours: number[];
+       volatility: number;
+     }> {
+       // Analyze patterns for optimal rebalancing times
+     }
+     
+     async predictNextWindow(minutes: number = 30): Promise<{
+       expectedGasPrice: bigint;
+       confidence: number;
+     }> {
+       // Simple prediction based on recent trends
+     }
+   }
+   ```
+
+3. **Enhanced Strategy Integration** (`src/strategies/gasAwareStrategy.ts`):
+   ```typescript
+   export class GasAwareRebalanceStrategy extends RebalanceStrategy {
+     constructor(
+       config: StrategyConfig,
+       private gasPriceOracle: GasPriceOracle,
+       private priceOracle: PriceOracle
+     ) {
+       super(config);
+     }
+     
+     async evaluate(
+       poolState: PoolState,
+       positionState: PositionState,
+       lastRebalance?: RebalanceDecision
+     ): Promise<RebalanceDecision> {
+       // Get base decision
+       const baseDecision = await super.evaluate(poolState, positionState, lastRebalance);
+       
+       // Enhance with real gas costs
+       const gasMetrics = await this.gasPriceOracle.getCurrentGasMetrics();
+       const estimatedGasUnits = 500000n; // Conservative estimate
+       
+       // Calculate actual gas cost in USD
+       const gasCostWei = gasMetrics.totalGasPrice * estimatedGasUnits;
+       const ethPrice = await this.priceOracle.getTokenPrice(WETH_ADDRESS);
+       const gasCostUsd = Number(gasCostWei) / 1e18 * ethPrice;
+       
+       // Adjust decision based on congestion
+       if (gasMetrics.congestionLevel === 'extreme' && baseDecision.urgency !== 'HIGH') {
+         return {
+           ...baseDecision,
+           shouldRebalance: false,
+           reason: 'CONGESTION_TOO_HIGH',
+           metrics: {
+             ...baseDecision.metrics,
+             gasCostUsd,
+             congestionLevel: gasMetrics.congestionLevel
+           }
+         };
+       }
+       
+       // Recalculate profitability with accurate gas costs
+       const profitMultiple = baseDecision.fees.totalUsd / gasCostUsd;
+       
+       return {
+         ...baseDecision,
+         estimatedGasCostUsd: gasCostUsd,
+         profitMultiple,
+         metrics: {
+           ...baseDecision.metrics,
+           gasCostUsd,
+           congestionLevel: gasMetrics.congestionLevel,
+           gasPrice: Number(gasMetrics.totalGasPrice) / 1e9 // in gwei
+         }
+       };
+     }
+   }
+   ```
+
+### Cloudflare-Specific Considerations
+- Cache gas prices aggressively (30-60 second TTL)
+- Use KV for historical pattern storage
+- Batch RPC calls to stay under timeout limits
+- Consider using a dedicated gas price API if available
+
+### Acceptance Criteria
+- [ ] Real-time gas prices fetched from Arbitrum
+- [ ] Congestion levels accurately determined
+- [ ] Gas costs properly integrated into rebalancing decisions
+- [ ] Historical patterns stored and analyzed
+- [ ] Cache prevents excessive RPC calls
+- [ ] Works within Cloudflare's execution limits
+
+### Integration Points
+- Replaces hardcoded gas price in Strategy Engine (Task 5)
+- Uses Price Oracle from enhanced mathematics
+- Stores historical data alongside pool state in KV
+- Enhances Telegram alerts with congestion warnings
