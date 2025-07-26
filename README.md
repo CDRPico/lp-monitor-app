@@ -1,27 +1,49 @@
-# Uniswap V3 LP Monitoring Bot
+# Uniswap V3 LP Monitoring Bot - Core Mathematics Module
 
-An automated monitoring bot for Uniswap V3 liquidity positions on Arbitrum, built with Cloudflare Workers.
+This module implements the core mathematical functions required for Uniswap v3 liquidity provision monitoring in the Cloudflare Workers environment.
 
 ## 🚀 Features
 
-- **Automated Monitoring**: Checks position status every 5 minutes via Cloudflare Cron
-- **Smart Rebalancing**: Detects when positions are out of range or rebalancing is profitable
-- **Telegram Alerts**: Real-time notifications when action is needed
-- **Cost Effective**: Runs on Cloudflare Workers (~$0-5/month)
-- **Manual Execution**: Provides transaction data for secure manual execution
+- **Tick Math**: Accurate tick/price conversions and sqrt price calculations
+- **Band Calculator**: Position range calculations with tick spacing alignment
+- **Fee Calculator**: Fee collection tracking and profitability analysis
+- **BigInt Support**: Native BigInt for precision in all calculations
+- **Performance Optimized**: Caching and efficient algorithms for Cloudflare Workers
 
-## 🏗️ Architecture
+## 🏗️ Module Structure
 
 ```
-Cloudflare Worker (Cron) → Monitor Position → Evaluate Strategy → Telegram Alert → Manual Execution
+src/utils/
+├── tickMath.ts      # Tick/price conversions, sqrt price calculations
+├── bandCalculator.ts # Position range calculations, tick alignment
+├── feeCalculator.ts  # Fee tracking, APR calculations
+└── index.ts         # Barrel exports
+
+test/utils/
+├── tickMath.test.ts
+├── bandCalculator.test.ts
+└── feeCalculator.test.ts
 ```
 
-## 📋 Prerequisites
+## 📋 Core Components
 
-- Node.js 18+
-- Cloudflare account
-- Telegram Bot Token
-- Arbitrum RPC endpoint (Alchemy/Infura)
+### TickMath
+- Tick to price conversions (1.0001^tick)
+- Price to tick conversions
+- SqrtPriceX96 calculations for liquidity math
+- Amount calculations for given liquidity
+
+### BandCalculator
+- Calculate position ranges from basis points
+- Tick spacing alignment (1, 10, 60, 200)
+- Range validation and position tracking
+- Optimal band width calculations
+
+### FeeCalculator
+- Uncollected fee calculations
+- Fee APR and profitability metrics
+- Rebalancing threshold analysis
+- Impermanent loss estimation
 
 ## 🛠️ Installation
 
